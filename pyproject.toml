@@ -1,0 +1,10 @@
+[project]
+name = "lufthansa-level3"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+[tool.ruff]
+line-length = 120
+builtins = ["spark"]
