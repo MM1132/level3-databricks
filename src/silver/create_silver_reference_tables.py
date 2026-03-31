@@ -16,3 +16,40 @@ def create_silver_reference_tables(spark):
 		)
 		USING DELTA
 	""")
+
+	spark.sql("""
+		CREATE TABLE IF NOT EXISTS lufthansa.silver.aircraft_summaries (
+			aircraft_code STRING,
+			name STRING,
+			airline_equip_code STRING
+		)
+		USING DELTA
+	""")
+
+	spark.sql("""
+		CREATE TABLE IF NOT EXISTS lufthansa.silver.airlines (
+			airline_id STRING,
+			airline_id_icao STRING,
+			name STRING
+		)
+		USING DELTA
+	""")
+
+	spark.sql("""
+		CREATE TABLE IF NOT EXISTS lufthansa.silver.cities (
+			city_code STRING,
+			country_code STRING,
+			name STRING,
+			utc_offset DOUBLE,
+			time_zone_id STRING
+		)
+		USING DELTA
+	""")
+
+	spark.sql("""
+		CREATE TABLE IF NOT EXISTS lufthansa.silver.countries (
+			country_code STRING,
+			name STRING
+		)
+		USING DELTA
+	""")

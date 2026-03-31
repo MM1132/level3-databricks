@@ -28,6 +28,13 @@ resources:
           spark_python_task:
             python_file: ${workspace.file_path}/src/silver/main_flights.py
 
+        - task_key: run_gold_flights
+          depends_on:
+            - task_key: run_silver_flights
+          environment_key: default
+          spark_python_task:
+            python_file: ${workspace.file_path}/src/gold/main.py
+
     bronze_reference_monthly_job:
       name: run_bronze_reference_monthly
 
