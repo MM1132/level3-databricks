@@ -11,7 +11,8 @@ def create_gold_tables(spark):
 			average_departure_delay_minutes DOUBLE,
 			delayed_flights INT,
 			delayed_flights_percentage DOUBLE,
-			date DATE
+			date DATE,
+			hour INT
 		)
 		USING DELTA
 	""")

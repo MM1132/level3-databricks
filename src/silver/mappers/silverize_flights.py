@@ -135,5 +135,3 @@ def silverize_flights(spark):
 	)
 
 	silver_table.write.mode("overwrite").saveAsTable("lufthansa.silver.flights")
-
-# 

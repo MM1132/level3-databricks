@@ -1,5 +1,6 @@
 from pyspark.sql.functions import (
   col,
+  hour,
   to_date,
   lit,
   count,
@@ -17,18 +18,19 @@ def goldenize_airports_daily_stats(spark):
   silver_flights_table = spark.table("lufthansa.silver.flights")
   silver_airports_table = spark.table("lufthansa.silver.airports")
 
-  flights_with_date = silver_flights_table.select(
+  flights_with_date_hour = silver_flights_table.select(
     col("departure_airport_code"),
-    to_date(col("departure_scheduled_time_local")).alias("date"),
+    to_date(coalesce(col("departure_actual_time_local"), col("departure_scheduled_time_local"))).alias("date"),
+    hour(coalesce(col("departure_actual_time_local"), col("departure_scheduled_time_local"))).alias("hour"),
     (
       (unix_timestamp(col("departure_actual_time_utc")) - unix_timestamp(col("departure_scheduled_time_utc")))
       / lit(60.0)
     ).alias("departure_delay_minutes"),
   ).where(
-    col("departure_airport_code").isNotNull() & col("date").isNotNull()
+    col("departure_airport_code").isNotNull() & col("date").isNotNull() & col("hour").isNotNull()
   )
 
-  if flights_with_date.limit(1).count() == 0:
+  if flights_with_date_hour.limit(1).count() == 0:
     print("No valid data in lufthansa.silver.flights, skipping gold load.")
     return
 
@@ -36,54 +38,62 @@ def goldenize_airports_daily_stats(spark):
   day_before_yesterday_date = spark.sql("SELECT date_sub(current_date(), 2) AS d").first()["d"]
 
   if spark.catalog.tableExists(gold_table_name):
-    existing_gold_dates = spark.table(gold_table_name).select("date").distinct()
+    spark.sql(f"DELETE FROM {gold_table_name} WHERE hour IS NULL")
+    existing_gold_date_hours = spark.table(gold_table_name).select("date", "hour").distinct()
   else:
-    existing_gold_dates = spark.createDataFrame([], "date DATE")
+    existing_gold_date_hours = spark.createDataFrame([], "date DATE, hour INT")
 
-  older_candidate_dates = (
-    flights_with_date
+  older_candidate_date_hours = (
+    flights_with_date_hour
     .filter(col("date") <= lit(day_before_yesterday_date))
-    .select("date")
+    .select("date", "hour")
     .distinct()
   )
 
-  older_dates_to_process = older_candidate_dates.join(existing_gold_dates, ["date"], "left_anti")
-  has_older_dates_to_process = older_dates_to_process.limit(1).count() > 0
-  has_yesterday_data = flights_with_date.filter(col("date") == lit(yesterday_date)).limit(1).count() > 0
+  older_date_hours_to_process = older_candidate_date_hours.join(existing_gold_date_hours, ["date", "hour"], "left_anti")
+  has_older_date_hours_to_process = older_date_hours_to_process.limit(1).count() > 0
+  has_yesterday_data = flights_with_date_hour.filter(col("date") == lit(yesterday_date)).limit(1).count() > 0
 
-  if not has_older_dates_to_process and not has_yesterday_data:
+  if not has_older_date_hours_to_process and not has_yesterday_data:
     print("No new historical dates and no yesterday data to refresh, skipping gold load.")
     return
 
-  dates_to_process = older_dates_to_process
+  date_hours_to_process = older_date_hours_to_process
   if has_yesterday_data:
-    yesterday_date_df = spark.createDataFrame([(yesterday_date,)], ["date"])
-    dates_to_process = dates_to_process.unionByName(yesterday_date_df).dropDuplicates(["date"])
+    yesterday_date_hours = (
+      flights_with_date_hour
+      .filter(col("date") == lit(yesterday_date))
+      .select("date", "hour")
+      .distinct()
+    )
+    date_hours_to_process = date_hours_to_process.unionByName(yesterday_date_hours).dropDuplicates(["date", "hour"])
 
-  flights_to_process = flights_with_date.join(dates_to_process, ["date"], "inner")
+  flights_to_process = flights_with_date_hour.join(date_hours_to_process, ["date", "hour"], "inner")
 
   aggregated_flights = flights_to_process.groupBy(
     col("departure_airport_code").alias("airport_code"),
     col("date"),
+    col("hour"),
   ).agg(
     count(lit(1)).cast("int").alias("total_departures"),
     round(avg(col("departure_delay_minutes")), 2).alias("average_departure_delay_minutes"),
     count(when(col("departure_delay_minutes") > lit(15), lit(1))).cast("int").alias("delayed_flights"),
   )
 
-  airport_dates = (
+  airport_date_hours = (
     silver_airports_table
     .select("airport_code", "longitude", "latitude")
-    .crossJoin(dates_to_process)
+    .crossJoin(date_hours_to_process)
   )
 
   gold_rows = (
-    airport_dates.alias("a")
+    airport_date_hours.alias("a")
     .join(
       aggregated_flights.alias("f"),
       (
         (col("a.airport_code") == col("f.airport_code"))
         & (col("a.date") == col("f.date"))
+        & (col("a.hour") == col("f.hour"))
       ),
       "left",
     )
@@ -101,11 +111,12 @@ def goldenize_airports_daily_stats(spark):
       .otherwise(lit(0.0))
       .alias("delayed_flights_percentage"),
       col("a.date").alias("date"),
+      col("a.hour").cast("int").alias("hour"),
     )
   )
 
-  if has_older_dates_to_process:
-    older_gold_rows = gold_rows.join(older_dates_to_process, ["date"], "inner")
+  if has_older_date_hours_to_process:
+    older_gold_rows = gold_rows.join(older_date_hours_to_process, ["date", "hour"], "inner")
     older_gold_rows.write.mode("append").saveAsTable(gold_table_name)
 
   if has_yesterday_data:
